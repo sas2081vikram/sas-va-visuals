@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>VA DDC Debugger</title>
+  <script src="https://sassoftware.github.io/sas-visualanalytics-thirdpartyvisualizations/va-content.js"></script>
+  <style>
+    body { font-family: monospace; padding: 20px; }
+    pre { background: #f4f4f4; padding: 10px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h2>🔍 SAS VA DDC Debugger</h2>
+  <p>Assign a variable in SAS VA and data will appear below:</p>
+  <pre id="output">⏳ Waiting for SAS VA data...</pre>
+
+  <script>
+    // Hook into the VA data event
+    va.onDataReceived = function(result) {
+      console.log("Raw result object:", result);
+
+      let output = document.getElementById("output");
+
+      if (result && result.data && result.data.length > 0) {
+        output.textContent = JSON.stringify(result.data, null, 2);
+      } else {
+        output.textContent = "⚠️ Data received but empty.\n" + JSON.stringify(result, null, 2);
+      }
+    };
+  </script>
+</body>
+</html>
