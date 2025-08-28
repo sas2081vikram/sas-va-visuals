@@ -1,83 +1,93 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>Normal Distribution - Surgeries Amount</title>
+  <meta charset="utf-8">
+  <title>Normal Distribution for Surgery Amounts</title>
+
+  <!-- Plotly for charting -->
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.8.0/math.js"></script>
-  <!-- ✅ Correct SAS helper scripts -->
+
+  <!-- Math.js for stats -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.8.0/math.min.js"></script>
+
+  <!-- SAS VA helper scripts (official source) -->
   <script src="https://sassoftware.github.io/sas-visualanalytics-thirdpartyvisualizations/util/messagingUtil.js"></script>
   <script src="https://sassoftware.github.io/sas-visualanalytics-thirdpartyvisualizations/util/contentUtil.js"></script>
+
+  <style>
+    body { margin:0; font-family: Arial, sans-serif; }
+    #chart { width:100%; height:100vh; }
+  </style>
 </head>
 <body>
-  <h2 style="font-family:Arial; text-align:center;">
-    Normal Distribution of Surgeries Amount
-  </h2>
-  <div id="chart" style="width:100%;height:600px;"></div>
+  <div id="chart">Waiting for SAS VA data...</div>
 
   <script>
-    // ✅ Function to draw chart
-    function drawNormalDistribution(values) {
-      if (!values || values.length === 0) {
-        document.getElementById("chart").innerHTML = "<b>No data available</b>";
+    // Callback: triggered when SAS VA sends data
+    function onDataReceived(messageFromVA) {
+      if (!messageFromVA || !messageFromVA.data || messageFromVA.data.length === 0) {
+        document.getElementById("chart").innerHTML = "⚠️ No data received from SAS VA.";
         return;
       }
 
-      // Parse to numbers
-      values = values.map(v => Number(v)).filter(v => !isNaN(v));
+      // --- DEBUG: Uncomment to see raw JSON
+      // document.getElementById("chart").innerHTML =
+      //   "<pre>" + JSON.stringify(messageFromVA, null, 2) + "</pre>";
+      // return;
+
+      // Extract the first numeric column only
+      let colIndex = 0;
+      let numericValues = messageFromVA.data
+        .map(row => parseFloat(row[colIndex]))
+        .filter(v => !isNaN(v));
+
+      if (numericValues.length === 0) {
+        document.getElementById("chart").innerHTML = "⚠️ No numeric values found.";
+        return;
+      }
+
+      // Stats
+      let mean = math.mean(numericValues);
+      let std = math.std(numericValues);
 
       // Histogram
-      var traceHist = {
-        x: values,
+      let hist = {
+        x: numericValues,
         type: "histogram",
-        histnorm: "probability density",
-        name: "Data",
-        opacity: 0.6
+        name: "Surgery Amounts",
+        opacity: 0.6,
+        marker: { color: "blue" }
       };
 
-      // Fit normal curve
-      var mean = math.mean(values);
-      var sd = math.std(values);
+      // Normal distribution curve
+      let xVals = math.range(mean - 4*std, mean + 4*std, (8*std)/100).toArray();
+      let yVals = xVals.map(x =>
+        (1 / (std * Math.sqrt(2 * Math.PI))) *
+        Math.exp(-0.5 * Math.pow((x - mean) / std, 2))
+      );
 
-      var x_vals = math.range(mean - 4 * sd, mean + 4 * sd, sd / 50).toArray();
-      var y_vals = x_vals.map(x => (1 / (sd * Math.sqrt(2 * Math.PI))) *
-                                   Math.exp(-0.5 * Math.pow((x - mean) / sd, 2)));
-
-      var traceCurve = {
-        x: x_vals,
-        y: y_vals,
-        type: "scatter",
+      // Scale curve to match histogram
+      let scale = numericValues.length * (1 / 20); // approx bin width
+      let curve = {
+        x: xVals,
+        y: yVals.map(v => v * scale),
         mode: "lines",
-        name: "Normal Curve"
+        name: "Normal Curve",
+        line: { color: "red", width: 2 }
       };
 
-      var layout = {
-        title: "Normal Distribution (Mean=" + mean.toFixed(2) +
-               ", SD=" + sd.toFixed(2) + ")",
+      // Plot
+      let layout = {
+        title: "Normal Distribution of Surgery Amounts",
         barmode: "overlay",
-        xaxis: { title: "Amount" },
-        yaxis: { title: "Density" }
+        xaxis: { title: "Surgery Amount" },
+        yaxis: { title: "Frequency" }
       };
 
-      Plotly.newPlot("chart", [traceHist, traceCurve], layout);
+      Plotly.newPlot("chart", [hist, curve], layout, {responsive:true});
     }
 
-    // ✅ Callback when SAS VA sends data
-    function onDataReceived(messageFromVA) {
-      console.log("✅ Data received from VA:", messageFromVA);
-
-      try {
-        // Flatten values (assuming 1 numeric measure assigned)
-        var values = messageFromVA.data.map(row => row[0]);
-        drawNormalDistribution(values);
-      } catch (err) {
-        console.error("Error processing VA data:", err);
-        document.getElementById("chart").innerHTML =
-          "<b>Error: Could not process data</b>";
-      }
-    }
-
-    // ✅ Register callback with SAS helper
+    // Register listener
     va.messagingUtil.setOnDataReceivedCallback(onDataReceived);
   </script>
 </body>
