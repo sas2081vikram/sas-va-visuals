@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Normal Distribution for Surgeries (Amount)</title>
+  <!-- Plotly for quick, high‑quality charts -->
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    :root{
+      --bg:#0b1220; --panel:#121a2b; --ink:#e8eefc; --muted:#9fb0d1; --accent:#5da9ff; --chip:#1b2742;
+    }
+    html,body{height:100%}
+    body{margin:0; font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--ink)}
+    .wrap{display:flex; flex-direction:column; gap:12px; padding:14px; height:100%}
+    header{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap}
+    .title{font-size:18px; font-weight:700}
+    .controls{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+    .chip{background:var(--chip); color:var(--ink); padding:6px 10px; border-radius:999px; font-size:12px}
+    label{font-size:12px; color:var(--muted)}
+    select,input[type="number"]{background:var(--panel); border:1px solid #24314d; color:var(--ink); border-radius:10px; padding:6px 8px}
+    input[type="checkbox"]{transform:scale(1.1)}
+    #chart{flex:1 1 auto; min-height:340px; background:var(--panel); border-radius:16px}
+    .footer{display:flex; gap:12px; flex-wrap:wrap}
+    .stat{background:var(--panel); border:1px solid #24314d; border-radius:14px; padding:10px 12px}
+    .stat h4{margin:0 0 6px 0; font-size:12px; color:var(--muted)}
+    .stat .v{font-size:14px; font-weight:600}
+    .warn{color:#ffd166}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="title">Normal Distribution • Surgeries by Amount</div>
+      <div class="controls">
+        <span class="chip" id="roleInfo">Awaiting data…</span>
+        <label>
+          Bins
+          <input id="bins" type="number" min="5" max="100" step="1" value="30"/>
+        </label>
+        <label>
+          Scale
+          <select id="scale">
+            <option value="density" selected>Density</option>
+            <option value="count">Count</option>
+          </select>
+        </label>
+        <label>
+          <input id="clipOutliers" type="checkbox" checked/> Clip 1% tails
+        </label>
+      </div>
+    </header>
+
+    <div id="chart"></div>
+
+    <div class="footer">
+      <div class="stat"><h4>Rows</h4><div class="v" id="rows">0</div></div>
+      <div class="stat"><h4>Mean (μ)</h4><div class="v" id="mean">—</div></div>
+      <div class="stat"><h4>Std Dev (σ)</h4><div class="v" id="sd">—</div></div>
+      <div class="stat"><h4>Min / Max</h4><div class="v" id="minmax">—</div></div>
+      <div class="stat"><h4>Status</h4><div class="v" id="status">Ready</div></div>
+    </div>
+  </div>
+
+  <script>
+    // --- Helpers ------------------------------------------------------------
+    function mean(arr){return arr.reduce((a,b)=>a+b,0)/arr.length}
+    function stddev(arr){const m=mean(arr); return Math.sqrt(arr.reduce((s,x)=>s+(x-m)*(x-m),0)/arr.length)}
+    function quantile(sorted,q){const pos=(sorted.length-1)*q; const base=Math.floor(pos); const rest=pos-base; if(sorted[base+1]!==undefined){return sorted[base]+rest*(sorted[base+1]-sorted[base]);} return sorted[base];}
+    function linspace(a,b,n){const step=(b-a)/(n-1); return Array.from({length:n},(_,i)=>a+i*step)}
+    function normalPDF(x,mu,sig){const t=(x-mu)/sig; return Math.exp(-0.5*t*t)/(sig*Math.sqrt(2*Math.PI));}
+
+    // Convert VA payload (various shapes) to a simple array of numbers for Amount and optional labels for Surgery Code
+    function extractVA(payload){
+      // Try shape: {data: {columns:[{name:"Amount"},...], data:[[...],[...]]}}
+      if(payload && payload.data && Array.isArray(payload.data.columns) && Array.isArray(payload.data.data)){
+        const cols = payload.data.columns.map(c=>c.name || c.label || c.id);
+        const amountIdx = cols.findIndex(c=>/amount/i.test(c));
+        const codeIdx = cols.findIndex(c=>/(surgery|procedure).*code/i.test(c));
+        const amounts=[], codes=[];
+        for(const row of payload.data.data){
+          const v = Number(row[amountIdx]);
+          if(!Number.isFinite(v)) continue;
+          amounts.push(v);
+          codes.push(codeIdx>-1? row[codeIdx] : null);
+        }
+        return {amounts, codes, meta:{amountField: cols[amountIdx]||"Amount", codeField: cols[codeIdx]||"Surgery Code"}};
+      }
+      // Try shape: {columns:[..], rows:[..]}
+      if(payload && Array.isArray(payload.columns) && Array.isArray(payload.rows)){
+        const cols = payload.columns.map(c=>c.name||c);
+        const amountIdx = cols.findIndex(c=>/amount/i.test(c));
+        const codeIdx = cols.findIndex(c=>/(surgery|procedure).*code/i.test(c));
+        const amounts=[], codes=[];
+        for(const row of payload.rows){
+          const v = Number(row[amountIdx]);
+          if(!Number.isFinite(v)) continue;
+          amounts.push(v);
+          codes.push(codeIdx>-1? row[codeIdx] : null);
+        }
+        return {amounts, codes, meta:{amountField: cols[amountIdx]||"Amount", codeField: cols[codeIdx]||"Surgery Code"}};
+      }
+      return {amounts:[], codes:[], meta:{amountField:"Amount", codeField:"Surgery Code"}};
+    }
+
+    function render(amounts, meta){
+      const statusEl = document.getElementById('status');
+      const binsEl = document.getElementById('bins');
+      const scaleSel = document.getElementById('scale');
+      const clipEl = document.getElementById('clipOutliers');
+
+      if(!amounts || amounts.length===0){
+        statusEl.textContent = 'No numeric Amount data received';
+        Plotly.react('chart', [{type:'scatter', x:[0], y:[0], mode:'text', text:['No data'], hoverinfo:'skip'}], {paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)', margin:{l:30,r:20,t:20,b:30}, xaxis:{visible:false}, yaxis:{visible:false}});
+        document.getElementById('rows').textContent = '0';
+        document.getElementById('mean').textContent = '—';
+        document.getElementById('sd').textContent = '—';
+        document.getElementById('minmax').textContent = '—';
+        return;
+      }
+
+      let vals = amounts.slice().filter(Number.isFinite);
+      vals.sort((a,b)=>a-b);
+      const n = vals.length;
+      let low = vals[0], high = vals[n-1];
+      if(clipEl.checked && n>30){
+        const q1 = quantile(vals,0.01), q99 = quantile(vals,0.99);
+        vals = vals.filter(v=>v>=q1 && v<=q99); // lightweight tail clip
+        low = vals[0];
+        high = vals[vals.length-1];
+      }
+
+      const mu = mean(vals);
+      const sd = stddev(vals) || 1e-9; // avoid zero division
+
+      const nBins = Math.max(5, Math.min(100, Number(binsEl.value)||30));
+      const hist = {
+        type:'histogram',
+        x: vals,
+        nbinsx: nBins,
+        name: scaleSel.value==='density' ? 'Density' : 'Count',
+        histnorm: scaleSel.value==='density' ? 'probability density' : '',
+        marker:{}, // default colors
+        hovertemplate:'Amount: %{x}<br>%{yaxis.title.text}: %{y}<extra></extra>'
+      };
+
+      const xs = linspace(low, high, 200);
+      const ys = xs.map(x=>normalPDF(x,mu,sd));
+
+      // If histogram is count, scale PDF to match histogram area (approximate)
+      let ypdf = ys.slice();
+      if(scaleSel.value==='count'){
+        // Scale by bin width * n
+        const binWidth = (high-low)/nBins;
+        const scale = n * binWidth;
+        ypdf = ys.map(y=>y*scale);
+      }
+
+      const curve = {
+        type:'scatter', mode:'lines', x: xs, y: ypdf,
+        name: 'Normal fit',
+        hovertemplate:'x: %{x}<br>PDF: %{y:.4f}<extra>Normal</extra>'
+      };
+
+      const layout = {
+        paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
+        margin:{l:50,r:20,t:20,b:50},
+        xaxis:{title: meta.amountField || 'Amount', gridcolor:'#1f2a44'},
+        yaxis:{title: scaleSel.value==='density' ? 'Density' : 'Count', gridcolor:'#1f2a44'},
+        legend:{orientation:'h', y:-0.2},
+      };
+
+      Plotly.react('chart', [hist, curve], layout, {displayModeBar:false, responsive:true});
+
+      // Stats
+      document.getElementById('rows').textContent = String(n);
+      document.getElementById('mean').textContent = mu.toFixed(2);
+      document.getElementById('sd').textContent = sd.toFixed(2);
+      document.getElementById('minmax').textContent = low.toFixed(2) + ' — ' + high.toFixed(2);
+      document.getElementById('status').textContent = 'Rendered';
+    }
+
+    // --- Wire up controls ---------------------------------------------------
+    document.getElementById('bins').addEventListener('change', ()=> render(window.__amounts||[], window.__meta||{}));
+    document.getElementById('scale').addEventListener('change', ()=> render(window.__amounts||[], window.__meta||{}));
+    document.getElementById('clipOutliers').addEventListener('change', ()=> render(window.__amounts||[], window.__meta||{}));
+
+    // --- SAS VA DDC Messaging ----------------------------------------------
+    const roleInfo = document.getElementById('roleInfo');
+
+    function setDataFromVA(payload){
+      const {amounts, codes, meta} = extractVA(payload);
+      window.__amounts = amounts; // stash for re-render on control changes
+      window.__meta = meta;
+      roleInfo.textContent = `Field: ${meta.amountField}${codes && codes.some(Boolean)? ' • Filtered by '+meta.codeField : ''}`;
+      render(amounts, meta);
+    }
+
+    // Handle messages from VA
+    window.addEventListener('message', (evt)=>{
+      const msg = evt.data || {};
+      // Support common shapes: direct data or wrapped in {sas:{...}}
+      if(msg && msg.sas && (msg.sas.type==='data' || msg.sas.type==='refresh')){
+        setDataFromVA(msg.sas.payload || msg.sas.data || {});
+        return;
+      }
+      if(msg && (msg.type==='data' || msg.type==='refresh' || msg.columns || msg.data || msg.rows)){
+        setDataFromVA(msg);
+        return;
+      }
+    });
+
+    // Proactively request data (some VA versions expect this ping)
+    try{ parent.postMessage({sas:{type:'getData', version:1}}, '*'); }catch(e){}
+
+    // --- Demo mode (when opened outside VA) --------------------------------
+    (function demo(){
+      const inIframe = window.self !== window.top;
+      if(inIframe) return; // VA will iframe this; only run demo when opened directly
+      const demo = [];
+      const n=1000; const trueMu=25000; const trueSd=6000;
+      for(let i=0;i<n;i++){
+        // Box-Muller
+        const u=Math.random(), v=Math.random();
+        const z=Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);
+        demo.push(trueMu + trueSd*z);
+      }
+      roleInfo.textContent = 'Demo • Field: Amount';
+      window.__amounts = demo; window.__meta = {amountField:'Amount'};
+      render(demo, {amountField:'Amount'});
+      document.getElementById('status').innerHTML = 'Demo mode <span class="warn">(open inside SAS VA DDC to use live data)</span>';
+    })();
+  </script>
+</body>
+</html>
