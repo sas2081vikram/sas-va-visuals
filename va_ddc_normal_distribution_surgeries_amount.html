@@ -2,55 +2,143 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Normal Distribution Preview</title>
+  <title>Normal Distribution - Surgeries Amount</title>
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <style>
     body { margin: 0; font-family: Arial, sans-serif; }
-    #chart { width: 100%; height: 90vh; }
+    #controls { padding: 10px; text-align: right; }
+    button {
+      padding: 6px 12px;
+      margin-left: 8px;
+      border: none;
+      border-radius: 6px;
+      background: #0073e6;
+      color: white;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover { background: #005bb5; }
+    #chart { width: 100%; height: 85vh; }
   </style>
 </head>
 <body>
-  <div id="chart"></div>
+  <div id="controls">
+    <button onclick="downloadImage()">Download Chart (PNG)</button>
+    <button onclick="downloadPDF()">Download Chart (PDF)</button>
+    <button onclick="downloadCSV()">Download Data (CSV)</button>
+  </div>
+  <div id="chart">Waiting for SAS VA data...</div>
+
   <script>
-    // Generate fake surgery amount data ~ N(500,100)
-    let values = Array.from({length: 500}, () => 500 + 100 * (Math.random() * 2 - 1));
+    let latestValues = []; // store last received values for CSV
 
-    let mean = values.reduce((a, b) => a + b, 0) / values.length;
-    let variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
-    let stddev = Math.sqrt(variance);
+    // Function: Draw histogram + normal curve
+    function renderNormalDistribution(values) {
+      if (!values || values.length === 0) {
+        document.getElementById("chart").innerHTML = "No numeric data received.";
+        return;
+      }
 
-    let x = [];
-    for (let i = mean - 3 * stddev; i <= mean + 3 * stddev; i += stddev / 50) {
-      x.push(i);
+      latestValues = values; // save for download
+
+      // Compute mean and std dev
+      let mean = values.reduce((a, b) => a + b, 0) / values.length;
+      let variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
+      let stddev = Math.sqrt(variance);
+
+      // X range (mean ± 3σ)
+      let x = [];
+      for (let i = mean - 3 * stddev; i <= mean + 3 * stddev; i += stddev / 50) {
+        x.push(i);
+      }
+
+      // Normal distribution formula
+      let y = x.map(val => (1 / (stddev * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * Math.pow((val - mean) / stddev, 2)));
+
+      // Histogram trace
+      let traceHist = {
+        x: values,
+        type: "histogram",
+        histnorm: "probability density",
+        name: "Surgery Amounts",
+        opacity: 0.6,
+        marker: { color: "steelblue" }
+      };
+
+      // Normal curve trace
+      let traceCurve = {
+        x: x,
+        y: y,
+        type: "scatter",
+        mode: "lines",
+        name: "Normal Curve",
+        line: { color: "red", width: 2 }
+      };
+
+      let layout = {
+        title: "Normal Distribution of Surgeries Amount",
+        xaxis: { title: "Amount" },
+        yaxis: { title: "Density" },
+        bargap: 0.05
+      };
+
+      Plotly.newPlot("chart", [traceHist, traceCurve], layout, {responsive: true});
     }
-    let y = x.map(val => (1 / (stddev * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * Math.pow((val - mean) / stddev, 2)));
 
-    let traceHist = {
-      x: values,
-      type: "histogram",
-      histnorm: "probability density",
-      name: "Surgery Amounts",
-      opacity: 0.6,
-      marker: { color: "steelblue" }
-    };
+    // Download chart as PNG
+    function downloadImage() {
+      Plotly.downloadImage(document.getElementById('chart'), {
+        format: 'png',
+        filename: 'normal_distribution_surgeries'
+      });
+    }
 
-    let traceCurve = {
-      x: x,
-      y: y,
-      type: "scatter",
-      mode: "lines",
-      name: "Normal Curve",
-      line: { color: "red", width: 2 }
-    };
+    // Download chart as PDF
+    async function downloadPDF() {
+      const chart = document.getElementById('chart');
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF("l", "pt", "a4"); // landscape A4
 
-    let layout = {
-      title: "Normal Distribution of Surgeries Amount (Preview)",
-      xaxis: { title: "Amount" },
-      yaxis: { title: "Density" },
-      bargap: 0.05
-    };
+      // Export Plotly chart as PNG first
+      const imgData = await Plotly.toImage(chart, { format: 'png', width: 1000, height: 600 });
 
-    Plotly.newPlot("chart", [traceHist, traceCurve], layout, {responsive: true});
+      pdf.text("Normal Distribution of Surgeries Amount", 40, 40);
+      pdf.addImage(imgData, "PNG", 40, 60, 720, 400); // fit inside A4
+      pdf.save("normal_distribution_surgeries.pdf");
+    }
+
+    // Download current data as CSV
+    function downloadCSV() {
+      if (latestValues.length === 0) {
+        alert("No data to export.");
+        return;
+      }
+
+      let csvContent = "data:text/csv;charset=utf-8,Amount\n" + latestValues.join("\n");
+      let encodedUri = encodeURI(csvContent);
+      let link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", "surgeries_amount.csv");
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    // Listen for SAS VA messages
+    window.addEventListener("message", function (evt) {
+      if (!evt || !evt.data) return;
+      let msg = evt.data;
+
+      if (msg.type === "data") {
+        console.log("Received data from SAS VA:", msg.data);
+
+        // Get numeric values from the first role
+        let values = msg.data.map(d => parseFloat(d[0])).filter(x => !isNaN(x));
+
+        renderNormalDistribution(values);
+      }
+    }, false);
   </script>
 </body>
 </html>
