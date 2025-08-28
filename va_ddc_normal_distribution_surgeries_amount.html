@@ -1,48 +1,29 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>Normal Distribution for Surgery Amounts</title>
-
-  <!-- Plotly for charting -->
-  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-
-  <!-- Math.js for stats -->
+  <meta charset="utf-8"/>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.8.0/math.min.js"></script>
-
-  <!-- SAS VA helper scripts (official source) -->
-  <script src="https://sassoftware.github.io/sas-visualanalytics-thirdpartyvisualizations/util/messagingUtil.js"></script>
-  <script src="https://sassoftware.github.io/sas-visualanalytics-thirdpartyvisualizations/util/contentUtil.js"></script>
-
-  <style>
-    body { margin:0; font-family: Arial, sans-serif; }
-    #chart { width:100%; height:100vh; }
-  </style>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <script src="https://unpkg.com/@sassoftware/va-report-components/dist/va-report-components.js"></script>
 </head>
 <body>
-  <div id="chart">Waiting for SAS VA data...</div>
-
+  <div id="chart" style="width:100%;height:100%;"></div>
   <script>
-    // Callback: triggered when SAS VA sends data
+    va.contentUtil.initialize(onDataReceived);
+
     function onDataReceived(messageFromVA) {
       if (!messageFromVA || !messageFromVA.data || messageFromVA.data.length === 0) {
-        document.getElementById("chart").innerHTML = "⚠️ No data received from SAS VA.";
+        document.getElementById("chart").innerHTML = "⚠️ No data assigned";
         return;
       }
 
-      // --- DEBUG: Uncomment to see raw JSON
-      // document.getElementById("chart").innerHTML =
-      //   "<pre>" + JSON.stringify(messageFromVA, null, 2) + "</pre>";
-      // return;
+      // Get assigned column name dynamically
+      let colName = messageFromVA.columns[0].name;
 
-      // Extract the first numeric column only
-      let colIndex = 0;
-      let numericValues = messageFromVA.data
-        .map(row => parseFloat(row[colIndex]))
-        .filter(v => !isNaN(v));
-
+      // Extract numeric values
+      let numericValues = messageFromVA.data.map(row => Number(row[0])).filter(v => !isNaN(v));
       if (numericValues.length === 0) {
-        document.getElementById("chart").innerHTML = "⚠️ No numeric values found.";
+        document.getElementById("chart").innerHTML = "⚠️ Assigned variable has no numeric values";
         return;
       }
 
@@ -50,45 +31,52 @@
       let mean = math.mean(numericValues);
       let std = math.std(numericValues);
 
-      // Histogram
+      // Histogram bin size
+      let binSize = (math.max(numericValues) - math.min(numericValues)) / 20;
+
       let hist = {
         x: numericValues,
         type: "histogram",
-        name: "Surgery Amounts",
+        name: colName,
         opacity: 0.6,
-        marker: { color: "blue" }
+        marker: { color: "blue" },
+        xbins: {
+          start: math.min(numericValues),
+          end: math.max(numericValues),
+          size: binSize
+        }
       };
 
-      // Normal distribution curve
-      let xVals = math.range(mean - 4*std, mean + 4*std, (8*std)/100).toArray();
+      // Normal curve
+      let xVals = math.range(mean - 4*std, mean + 4*std, (8*std)/200).toArray();
       let yVals = xVals.map(x =>
         (1 / (std * Math.sqrt(2 * Math.PI))) *
         Math.exp(-0.5 * Math.pow((x - mean) / std, 2))
       );
 
-      // Scale curve to match histogram
-      let scale = numericValues.length * (1 / 20); // approx bin width
+      // Scale to histogram
+      let maxHistHeight = numericValues.length * binSize ? numericValues.length : 1;
+      let maxPdfHeight = Math.max(...yVals);
+      let scale = maxHistHeight / maxPdfHeight;
+
       let curve = {
         x: xVals,
         y: yVals.map(v => v * scale),
         mode: "lines",
         name: "Normal Curve",
-        line: { color: "red", width: 2 }
+        line: { color: "red", width: 3 }
       };
 
-      // Plot
+      // Layout with dynamic title & axis label
       let layout = {
-        title: "Normal Distribution of Surgery Amounts",
+        title: `Normal Distribution of ${colName}`,
         barmode: "overlay",
-        xaxis: { title: "Surgery Amount" },
+        xaxis: { title: colName },
         yaxis: { title: "Frequency" }
       };
 
       Plotly.newPlot("chart", [hist, curve], layout, {responsive:true});
     }
-
-    // Register listener
-    va.messagingUtil.setOnDataReceivedCallback(onDataReceived);
   </script>
 </body>
 </html>
